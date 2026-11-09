@@ -29,9 +29,18 @@ export const Events = Object.freeze({
   ZONE_HOVER: 'world:zoneHover', // { zone | null }
   ZONE_SELECT: 'world:zoneSelect', // { zone }
 
-  // Simulation clock (driven by later steps)
-  CLOCK_MINUTE: 'sim:minute', // { day, hour, minute }
+  // Simulation clock
+  CLOCK_MINUTE: 'sim:minute', // { day, hour, minute, minuteOfDay, total }
+  CLOCK_HOUR: 'sim:hour', // { day, hour }
   CLOCK_DAY: 'sim:day', // { day }
+  CLOCK_SPEED: 'sim:speed', // { speed, label, paused }
+
+  // Residents & schedule
+  RESIDENTS_SPAWNED: 'residents:spawned', // { residents }
+  BLOCK_START: 'schedule:blockStart', // { block, day }
+  BLOCK_END: 'schedule:blockEnd', // { block, day, summary }
+  ATTENDANCE: 'schedule:attendance', // { resident, block, status: 'onTime' | 'late' | 'missed' }
+  FACILITY_STATS: 'facility:stats', // { population, avgComposure, today: { onTime, late, missed } }
 });
 
 export class EventBus {
@@ -79,7 +88,7 @@ export class EventBus {
    * the remaining listeners from running.
    */
   emit(event, payload) {
-    if (this.debug && event !== Events.TICK) {
+    if (this.debug && event !== Events.TICK && event !== Events.CLOCK_MINUTE) {
       console.debug(`[bus] ${event}`, payload);
     }
     this._dispatch(this._listeners.get(event), payload, event);

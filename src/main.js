@@ -1,5 +1,12 @@
 import { bus, Events } from './core/EventBus.js';
 import { EstateBuilder } from './world/EstateBuilder.js';
+import { SimClock } from './sim/SimClock.js';
+import { SubjectFactory } from './sim/SubjectFactory.js';
+import { ScheduleSystem } from './sim/ScheduleSystem.js';
+import { Hud } from './ui/Hud.js';
+
+const SEED = new URLSearchParams(location.search).get('seed') ?? 'sanctuary-alpha';
+const RESIDENT_COUNT = 24;
 
 const viewport = document.getElementById('viewport');
 const fpsEl = document.getElementById('hud-fps');
@@ -7,16 +14,22 @@ const fpsEl = document.getElementById('hud-fps');
 bus.emit(Events.BOOT);
 
 const estate = new EstateBuilder(viewport).build();
+const clock = new SimClock({ day: 1, minuteOfDay: 6 * 60 + 30 });
+const residents = new SubjectFactory({ seed: SEED }).createRoster(RESIDENT_COUNT);
+const schedule = new ScheduleSystem({ residents, scene: estate.scene, clock, seed: SEED });
+const hud = new Hud({ clock, schedule });
+
+estate.setTimeOfDay(clock.hours);
 
 let last = performance.now();
 let elapsed = 0;
-let paused = false;
+let tabHidden = false;
 let fpsFrames = 0;
 let fpsTime = 0;
 
-bus.on(Events.PAUSE, () => (paused = true));
+bus.on(Events.PAUSE, () => (tabHidden = true));
 bus.on(Events.RESUME, () => {
-  paused = false;
+  tabHidden = false;
   last = performance.now();
 });
 document.addEventListener('visibilitychange', () =>
@@ -25,15 +38,19 @@ document.addEventListener('visibilitychange', () =>
 
 function frame(now) {
   requestAnimationFrame(frame);
-  if (paused) return;
+  if (tabHidden) return;
 
   // Clamp dt so a stalled tab doesn't fling the simulation forward.
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   elapsed += dt;
 
+  const dtGame = clock.update(dt);
+  schedule.update(dtGame);
+  estate.setTimeOfDay(clock.hours);
   estate.update(dt);
-  bus.emit(Events.TICK, { dt, elapsed });
+  hud.update(dt);
+  bus.emit(Events.TICK, { dt, dtGame, elapsed });
   estate.render();
 
   fpsFrames++;
@@ -49,4 +66,4 @@ requestAnimationFrame(frame);
 bus.emit(Events.READY, { zones: [...estate.zones.keys()] });
 
 // Handy for poking at the scene from devtools during the alpha.
-if (import.meta.env.DEV) window.__sanctuary = { bus, estate };
+if (import.meta.env.DEV) window.__sanctuary = { bus, estate, clock, schedule, residents };

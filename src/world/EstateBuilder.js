@@ -23,6 +23,14 @@ export const PALETTE = Object.freeze({
   trunk: 0x6b4e3a,
 });
 
+const TOD = {
+  skyDay: new THREE.Color(PALETTE.sky),
+  skyDusk: new THREE.Color(0xe7b48f),
+  skyNight: new THREE.Color(0x1d2430),
+  keyNoon: new THREE.Color(0xffe2c0),
+  keyLow: new THREE.Color(0xff9e63),
+};
+
 const flat = (color, extra = {}) =>
   new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, metalness: 0, ...extra });
 
@@ -95,6 +103,30 @@ export class EstateBuilder {
 
     this.lights = { hemi, key, fill, rim };
     this.scene.add(lights);
+  }
+
+  /**
+   * Drive the studio rig from the simulation clock. `hours` is 0–24.
+   * Sun rises ~06:00, sets ~20:00; at night a dim cool fill stands in for moonlight.
+   */
+  setTimeOfDay(hours) {
+    const { hemi, key, fill, rim } = this.lights;
+    const t = (hours - 6) / 14; // 0 at sunrise, 1 at sunset
+    const sunHeight = Math.sin(Math.PI * THREE.MathUtils.clamp(t, -0.15, 1.15));
+    const daylight = THREE.MathUtils.smoothstep(sunHeight, -0.1, 0.35);
+    const lowSun = 1 - THREE.MathUtils.smoothstep(sunHeight, 0.05, 0.45); // warm tint near horizon
+
+    const az = Math.PI * THREE.MathUtils.clamp(t, 0, 1);
+    key.position.set(Math.cos(az) * 70, 15 + Math.max(sunHeight, 0) * 65, 30);
+    key.intensity = 2.4 * daylight;
+    key.color.copy(TOD.keyNoon).lerp(TOD.keyLow, lowSun);
+
+    hemi.intensity = 0.22 + 0.68 * daylight;
+    fill.intensity = 0.35 + 0.25 * daylight;
+    rim.intensity = 0.25 + 0.55 * daylight;
+
+    this.scene.background.copy(TOD.skyNight).lerp(TOD.skyDay, daylight).lerp(TOD.skyDusk, lowSun * daylight * 0.6);
+    this.scene.fog.color.copy(this.scene.background);
   }
 
   // ------------------------------------------------------------------ camera
@@ -195,7 +227,7 @@ export class EstateBuilder {
 
     this._zone(estate, 'Main House', this._building({ w: 28, d: 16, h: 10, floors: 2 }), [0, 0, -22]);
     this._zone(estate, 'Residence Wing', this._building({ w: 12, d: 24, h: 7 }), [-30, 0, -8]);
-    this._zone(estate, 'Wellness Pavilion', this._pavilion(), [30, 0, -6]);
+    this._zone(estate, 'Wellness Pavilion', this._pavilion(), [28, 0, -6]);
     this._zone(estate, 'Dining Hall', this._building({ w: 16, d: 12, h: 6 }), [28, 0, 24]);
     this._zone(estate, 'Courtyard', this._courtyard(), [0, 0, 8]);
     this._zone(estate, 'Gardens', this._gardens(), [-30, 0, 30]);
@@ -250,8 +282,8 @@ export class EstateBuilder {
     };
     strip(4, 70, 0, 18); // main avenue from gate to house
     strip(60, 3, 0, 8); // east–west cross path
-    strip(3, 30, 28, 10); // to dining
-    strip(3, 24, -30, 18); // to gardens
+    strip(3, 15, 28, 10.5); // pavilion steps ↔ dining hall
+    strip(3, 15, -30, 11.5); // residence door ↔ garden entry
     g.name = 'Paths';
     return g;
   }
@@ -286,7 +318,7 @@ export class EstateBuilder {
     g.add(base);
     const colMat = flat(PALETTE.stone);
     for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
+      const a = ((i + 0.5) / 8) * Math.PI * 2; // leave an entrance gap facing +Z
       const col = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 5, 6), colMat));
       col.position.set(Math.cos(a) * 7.8, 3.3, Math.sin(a) * 7.8);
       g.add(col);
