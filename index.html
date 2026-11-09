@@ -20,13 +20,17 @@
           </div>
           <div class="hud-panel pointer-events-auto w-64 text-xs hidden md:block">
             <div class="flex items-baseline justify-between">
-              <span class="text-stone-400">Residents</span><span id="hud-pop" class="font-mono">0</span>
+              <span class="text-stone-400">Residents · Staff</span>
+              <span class="font-mono"><span id="hud-pop">0</span> · <span id="hud-staff">0</span></span>
             </div>
             <div class="mt-2 flex items-baseline justify-between">
               <span class="text-stone-400">Avg composure</span><span id="hud-composure" class="font-mono">--</span>
             </div>
             <div class="mt-1 h-1.5 rounded bg-white/10"><div id="hud-composure-bar" class="h-full rounded transition-all"></div></div>
-            <div id="hud-needs" class="mt-3 space-y-1"></div>
+            <div id="hud-meters" class="mt-3 space-y-1"></div>
+            <p class="mt-3 text-stone-400">Aura</p>
+            <div id="hud-bands" class="mt-1 flex flex-wrap gap-1"></div>
+            <p id="hud-queued" class="mt-1"></p>
             <p class="mt-3 text-stone-400">Today</p>
             <p id="hud-attendance"></p>
           </div>
@@ -35,10 +39,11 @@
         <div class="flex flex-col items-end gap-3">
           <div class="hud-panel pointer-events-auto text-right">
             <div class="flex items-baseline justify-end gap-2">
-              <span id="hud-night" class="hidden text-[10px] uppercase tracking-wider text-sky-300">night ▸▸</span>
+              <span id="hud-phase" class="text-[10px] uppercase tracking-wider text-sky-300"></span>
               <span class="text-xs text-stone-400">Day <span id="hud-day">1</span></span>
             </div>
-            <p class="text-lg font-mono" id="hud-clock">06:00</p>
+            <p class="text-lg font-mono" id="hud-clock">06:40</p>
+            <div class="mt-1 h-1 rounded bg-white/10" title="Working day 07:00–18:00"><div id="hud-progress" class="h-full rounded bg-amber-200/60"></div></div>
             <div id="hud-speeds" class="mt-1 flex gap-1"></div>
           </div>
           <div class="hud-panel pointer-events-auto w-64 text-xs">
@@ -54,12 +59,12 @@
         <div class="hud-panel pointer-events-auto text-xs text-stone-400 leading-relaxed">
           <p><kbd>LMB</kbd> drag · orbit &nbsp; <kbd>RMB</kbd> drag · pan &nbsp; <kbd>Wheel</kbd> · zoom</p>
           <p><kbd>WASD</kbd> · move focus &nbsp; <kbd>Q</kbd>/<kbd>E</kbd> · rotate &nbsp; <kbd>F</kbd> · reset view</p>
-          <p><kbd>Space</kbd> · pause &nbsp; <kbd>1</kbd>–<kbd>3</kbd> · speed</p>
+          <p><kbd>Space</kbd> · pause &nbsp; <kbd>1</kbd>–<kbd>3</kbd> · speed · day runs 07:00–18:00</p>
         </div>
         <div class="flex items-end gap-3">
           <details class="hud-panel pointer-events-auto text-xs hidden lg:block" open>
-            <summary class="cursor-pointer text-stone-400">Roster (lowest composure first)</summary>
-            <div class="mt-1 max-h-52 w-80 overflow-y-auto">
+            <summary class="cursor-pointer text-stone-400">Roster (lowest composure first) · fatigue · composure</summary>
+            <div class="mt-1 max-h-52 w-[26rem] overflow-y-auto">
               <table class="w-full"><tbody id="hud-roster"></tbody></table>
             </div>
           </details>

@@ -32,15 +32,19 @@ export const Events = Object.freeze({
   // Simulation clock
   CLOCK_MINUTE: 'sim:minute', // { day, hour, minute, minuteOfDay, total }
   CLOCK_HOUR: 'sim:hour', // { day, hour }
-  CLOCK_DAY: 'sim:day', // { day }
+  CLOCK_DAY: 'sim:day', // { day } — a new working day has opened
   CLOCK_SPEED: 'sim:speed', // { speed, label, paused }
 
-  // Residents & schedule
-  RESIDENTS_SPAWNED: 'residents:spawned', // { residents }
+  // Agents (residents + staff) & schedule
+  AGENTS_SPAWNED: 'agents:spawned', // { agents, residents, staff }
   BLOCK_START: 'schedule:blockStart', // { block, day }
   BLOCK_END: 'schedule:blockEnd', // { block, day, summary }
   ATTENDANCE: 'schedule:attendance', // { resident, block, status: 'onTime' | 'late' | 'missed' }
-  FACILITY_STATS: 'facility:stats', // { population, avgComposure, today: { onTime, late, missed } }
+  FACILITY_STATS: 'facility:stats', // { population, staff, avg: { composure, fatigue, defiance }, bands, queued, today, block, next }
+
+  // Composure
+  AURA_CHANGED: 'composure:aura', // { agent, from, to }  bands: 'BLUE' | 'AMBER' | 'RED'
+  STATE_CHANGED: 'agent:state', // { agent, from, to }  see content/roster.js STATES
 });
 
 export class EventBus {

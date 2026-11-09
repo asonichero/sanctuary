@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /**
- * NavGraph — walkable network for residents.
+ * NavGraph — walkable network for residents and staff.
  *
  * Coordinates mirror the layout in EstateBuilder. Residents travel:
  *   current slot → (interior path reversed) → zone node → graph route →
@@ -22,9 +22,10 @@ const NODES = {
   westJunction: v(-30, 8),
   houseDoor: v(0, -13.6),
   residenceDoor: v(-30, 4.6),
-  pavilionDoor: v(28, 3.4),
-  diningDoor: v(28, 17.6),
+  studioDoor: v(28, 3.4),
+  hallEntry: v(28, 16.4),
   gardensEntry: v(-30, 18.5),
+  lawn: v(0, 26),
   gate: v(0, 68),
 };
 
@@ -32,36 +33,85 @@ const EDGES = [
   // ring around the fountain
   ['plazaN', 'plazaE'], ['plazaE', 'plazaS'], ['plazaS', 'plazaW'], ['plazaW', 'plazaN'],
   ['plazaN', 'houseDoor'],
-  ['plazaS', 'gate'],
-  ['plazaE', 'eastJunction'], ['eastJunction', 'pavilionDoor'], ['eastJunction', 'diningDoor'],
+  ['plazaS', 'lawn'], ['lawn', 'gate'],
+  ['plazaE', 'eastJunction'], ['eastJunction', 'studioDoor'], ['eastJunction', 'hallEntry'],
   ['plazaW', 'westJunction'], ['westJunction', 'residenceDoor'], ['westJunction', 'gardensEntry'],
 ];
 
-/** Slot generators return [{ pos, via: Vector3[] }] — `via` runs from the zone node to the slot. */
+/**
+ * Slot generators return [{ pos, via: Vector3[] }] — `via` runs from the zone
+ * node to the slot. `slots` are residents' sockets, `posts` the staff's.
+ */
+const slot = (pos, via = []) => ({ pos, via });
+
+/** Alignment Hall: open-sided hall on a low platform; 4 lineup rows of 6 facing the staff line. */
+export const HALL = { x: 28, z: 24, floor: 0.3 };
+function hallSlots() {
+  const slots = [];
+  const front = v(HALL.x, 17.8, HALL.floor);
+  for (const z of [21.5, 24, 26.5, 29]) {
+    for (let c = 0; c < 6; c++) slots.push(slot(v(HALL.x - 6.25 + c * 2.5, z, HALL.floor), [front]));
+  }
+  return slots;
+}
+function hallPosts() {
+  const front = v(HALL.x, 17.8, HALL.floor);
+  return [0, -4, 4].map((dx) => slot(v(HALL.x + dx, 18.8, HALL.floor), [front]));
+}
+
+/** Somatic Studio: the domed pavilion, a 5×5 grid of mats with the centre kept for staff. */
+export const STUDIO = { x: 28, z: -6, floor: 0.8, spacing: 2.5 };
+function studioSlots() {
+  const inner = v(28, -0.5, STUDIO.floor);
+  const slots = [];
+  for (let r = -2; r <= 2; r++) {
+    for (let c = -2; c <= 2; c++) {
+      if (r === 0 && c === 0) continue;
+      slots.push(slot(v(STUDIO.x + c * STUDIO.spacing, STUDIO.z + r * STUDIO.spacing, STUDIO.floor), [inner]));
+    }
+  }
+  return slots;
+}
+function studioPosts() {
+  const inner = v(28, -0.5, STUDIO.floor);
+  return [
+    slot(v(STUDIO.x, STUDIO.z, STUDIO.floor), [inner]),
+    slot(v(STUDIO.x, STUDIO.z + 7.4, STUDIO.floor), []),
+    slot(v(STUDIO.x - 7.4, STUDIO.z, STUDIO.floor), [inner]),
+  ];
+}
+
+/** Sunken Courtyard: gravel bowl round the fountain; three rings of raking spots. */
+export const COURTYARD = { x: 0, z: 8, radius: 10 };
 function courtyardSlots() {
-  const center = v(0, 8);
   const slots = [];
   for (let i = 0; i < 16; i++) {
     const a = (i / 16) * Math.PI * 2 + 0.2;
     const r = i % 2 ? 5 : 7.5;
-    slots.push({ pos: v(center.x + Math.cos(a) * r, center.z + Math.sin(a) * r), via: [] });
+    slots.push(slot(v(COURTYARD.x + Math.cos(a) * r, COURTYARD.z + Math.sin(a) * r)));
+  }
+  for (let i = 0; i < 8; i++) {
+    const a = ((i + 0.5) / 8) * Math.PI * 2 + 0.2;
+    slots.push(slot(v(COURTYARD.x + Math.cos(a) * 9, COURTYARD.z + Math.sin(a) * 9)));
   }
   return slots;
 }
+function courtyardPosts() {
+  return [[0, 1], [1, 0], [-1, 0]].map(([dx, dz]) => slot(v(COURTYARD.x + dx * 10.8, COURTYARD.z + dz * 10.8, 0.35)));
+}
 
-function pavilionSlots() {
-  const c = v(28, -6, 0.8);
-  const inner = v(28, -0.5, 0.8);
+/** Assembly Lawn: 4 rows of 6 on the avenue south of the courtyard, facing a low dais. */
+export const LAWN = { x: 0, daisZ: 40.5, dais: 0.4 };
+function lawnSlots() {
   const slots = [];
-  for (let ring = 0; ring < 2; ring++) {
-    const r = ring ? 4.8 : 2.4;
-    const n = ring ? 12 : 6;
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      slots.push({ pos: v(c.x + Math.cos(a) * r, c.z + Math.sin(a) * r, 0.8), via: [inner] });
-    }
+  for (const z of [29, 31.5, 34, 36.5]) {
+    for (let c = 0; c < 6; c++) slots.push(slot(v(LAWN.x - 6.25 + c * 2.5, z)));
   }
   return slots;
+}
+function lawnPosts() {
+  const step = v(LAWN.x, 38.6);
+  return [0, -3, 3].map((dx) => slot(v(LAWN.x + dx, LAWN.daisZ, LAWN.dais), [step]));
 }
 
 function gardenSlots() {
@@ -69,22 +119,40 @@ function gardenSlots() {
   // lanes run at local x = ±3.5 and along the north edge at local z = -10.5.
   const ox = -30, oz = 30;
   const slots = [];
-  for (const lx of [-10.5, -7, 7, 10.5]) slots.push({ pos: v(ox + lx, oz - 10.5), via: [] });
+  for (const lx of [-10.5, -7, 7, 10.5]) slots.push(slot(v(ox + lx, oz - 10.5)));
   for (const lx of [-3.5, 3.5]) {
     const laneHead = v(ox + lx, oz - 10.5);
-    for (const lz of [-7, -3.5, 0, 3.5, 7, 10.5]) slots.push({ pos: v(ox + lx, oz + lz), via: [laneHead] });
+    for (const lz of [-7, -3.5, 0, 3.5, 7, 10.5]) slots.push(slot(v(ox + lx, oz + lz), [laneHead]));
   }
   return slots;
 }
 
+/**
+ * Zones. Indoor zones end at the door (agents are hidden inside). Outdoor
+ * zones have resident `slots`, staff `posts`, a `focus` residents face and a
+ * `crowd` point staff face.
+ */
 export const ZONES = Object.freeze({
   'Residence Wing': { node: 'residenceDoor', indoor: true },
   'Main House': { node: 'houseDoor', indoor: true },
-  'Dining Hall': { node: 'diningDoor', indoor: true },
-  'Wellness Pavilion': { node: 'pavilionDoor', indoor: false, slots: pavilionSlots() },
-  Gardens: { node: 'gardensEntry', indoor: false, slots: gardenSlots() },
-  // Courtyard has no single door: each slot uses the nearest ring node.
-  Courtyard: { node: null, indoor: false, slots: courtyardSlots() },
+  'Alignment Hall': {
+    node: 'hallEntry', indoor: false, slots: hallSlots(), posts: hallPosts(),
+    focus: v(HALL.x, 18.8), crowd: v(HALL.x, 25),
+  },
+  'Somatic Studio': {
+    node: 'studioDoor', indoor: false, slots: studioSlots(), posts: studioPosts(),
+    focus: v(STUDIO.x, STUDIO.z), crowd: v(STUDIO.x, STUDIO.z + 2),
+  },
+  // The courtyard has no single entry: each slot uses the nearest ring node.
+  'Sunken Courtyard': {
+    node: null, indoor: false, slots: courtyardSlots(), posts: courtyardPosts(),
+    focus: v(COURTYARD.x, COURTYARD.z), crowd: v(COURTYARD.x, COURTYARD.z),
+  },
+  'Assembly Lawn': {
+    node: 'lawn', indoor: false, slots: lawnSlots(), posts: lawnPosts(),
+    focus: v(LAWN.x, LAWN.daisZ), crowd: v(LAWN.x, 33),
+  },
+  Gardens: { node: 'gardensEntry', indoor: false, slots: gardenSlots(), posts: [] },
 });
 
 export class NavGraph {
@@ -97,7 +165,7 @@ export class NavGraph {
       this.adj.get(b).push({ to: a, d });
     }
     this._routeCache = new Map();
-    this._occupied = new Map(Object.keys(ZONES).map((z) => [z, new Set()]));
+    this._occupied = new Map(); // `${zone}/${kind}` -> Set of taken indices
   }
 
   /** Shortest node path (Dijkstra; the graph is tiny so this is cheap and cached). */
@@ -142,19 +210,32 @@ export class NavGraph {
     return best;
   }
 
-  /** Reserve a free slot in an outdoor zone (or null for indoor zones). */
-  claimSlot(zoneName, rng) {
+  _taken(zoneName, kind) {
+    const key = `${zoneName}/${kind}`;
+    if (!this._occupied.has(key)) this._occupied.set(key, new Set());
+    return this._occupied.get(key);
+  }
+
+  /**
+   * Reserve a free socket in an outdoor zone (null for indoor zones).
+   * `kind` is 'slots' (residents) or 'posts' (staff). When every socket is
+   * taken the agent shares one rather than being turned away.
+   */
+  claimSlot(zoneName, rng, kind = 'slots') {
     const zone = ZONES[zoneName];
-    if (zone.indoor) return null;
-    const taken = this._occupied.get(zoneName);
-    const free = zone.slots.map((_, i) => i).filter((i) => !taken.has(i));
-    const index = free.length ? rng.pick(free) : rng.int(0, zone.slots.length - 1); // overflow: share
+    const list = zone.indoor ? null : zone[kind]?.length ? zone[kind] : zone.slots;
+    if (!list) return null;
+    const used = list === zone[kind] ? kind : 'slots';
+    const taken = this._taken(zoneName, used);
+    const free = list.map((_, i) => i).filter((i) => !taken.has(i));
+    // Staff take posts in order (head post first); residents scatter.
+    const index = free.length ? (used === 'posts' ? free[0] : rng.pick(free)) : rng.int(0, list.length - 1);
     taken.add(index);
-    return { index, ...zone.slots[index] };
+    return { index, kind: used, id: `${zoneName}/${used}#${String(index).padStart(2, '0')}`, ...list[index] };
   }
 
   releaseSlot(zoneName, slot) {
-    if (slot) this._occupied.get(zoneName)?.delete(slot.index);
+    if (slot) this._taken(zoneName, slot.kind).delete(slot.index);
   }
 
   /**

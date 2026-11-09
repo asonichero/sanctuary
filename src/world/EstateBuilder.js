@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { bus, Events } from '../core/EventBus.js';
+import { HALL, STUDIO, COURTYARD, LAWN } from './NavGraph.js';
 
 /**
  * EstateBuilder — owns the renderer, scene, studio lighting, the
@@ -21,6 +22,10 @@ export const PALETTE = Object.freeze({
   foliage: 0x6f8f5c,
   foliageDark: 0x557447,
   trunk: 0x6b4e3a,
+  gravel: 0xcabda3,
+  gravelLine: 0xb3a587,
+  mat: 0x7d8a86,
+  timber: 0x8a6a48,
 });
 
 const TOD = {
@@ -41,6 +46,7 @@ export class EstateBuilder {
   constructor(container) {
     this.container = container;
     this.zones = new Map(); // name -> { name, mesh, bounds }
+    this._cutaways = []; // roofs that fade when the camera looks into their zone
     this._keys = new Set();
     this._tmpVec = new THREE.Vector3();
 
@@ -227,9 +233,10 @@ export class EstateBuilder {
 
     this._zone(estate, 'Main House', this._building({ w: 28, d: 16, h: 10, floors: 2 }), [0, 0, -22]);
     this._zone(estate, 'Residence Wing', this._building({ w: 12, d: 24, h: 7 }), [-30, 0, -8]);
-    this._zone(estate, 'Wellness Pavilion', this._pavilion(), [28, 0, -6]);
-    this._zone(estate, 'Dining Hall', this._building({ w: 16, d: 12, h: 6 }), [28, 0, 24]);
-    this._zone(estate, 'Courtyard', this._courtyard(), [0, 0, 8]);
+    this._zone(estate, 'Somatic Studio', this._studio(), [STUDIO.x, 0, STUDIO.z]);
+    this._zone(estate, 'Alignment Hall', this._hall(), [HALL.x, 0, HALL.z]);
+    this._zone(estate, 'Sunken Courtyard', this._courtyard(), [COURTYARD.x, 0, COURTYARD.z]);
+    this._zone(estate, 'Assembly Lawn', this._lawn(), [LAWN.x, 0, 0]);
     this._zone(estate, 'Gardens', this._gardens(), [-30, 0, 30]);
 
     estate.add(this._perimeterWall(70));
@@ -248,6 +255,30 @@ export class EstateBuilder {
     parent.add(object);
     object.updateMatrixWorld(true);
     this.zones.set(name, { name, object, bounds: new THREE.Box3().setFromObject(object) });
+  }
+
+  /**
+   * Mark a roof as a cutaway: it fades out while the camera is focused inside
+   * `radius` of it, so the activity underneath stays readable.
+   */
+  _cutaway(mesh, radius) {
+    mesh.material = mesh.material.clone();
+    mesh.material.transparent = true;
+    this._cutaways.push({ mesh, radius, opacity: 1 });
+    return mesh;
+  }
+
+  _updateCutaways(dt) {
+    const t = this.controls.target;
+    const p = this._tmpVec;
+    for (const c of this._cutaways) {
+      c.mesh.getWorldPosition(p);
+      const near = Math.hypot(p.x - t.x, p.z - t.z) < c.radius && this.camera.position.y > 4;
+      c.opacity += ((near ? 0.12 : 1) - c.opacity) * Math.min(1, dt * 6);
+      c.mesh.material.opacity = c.opacity;
+      c.mesh.material.depthWrite = c.opacity > 0.98;
+      c.mesh.castShadow = c.opacity > 0.5;
+    }
   }
 
   _shadowed(mesh, cast = true, receive = true) {
@@ -282,7 +313,7 @@ export class EstateBuilder {
     };
     strip(4, 70, 0, 18); // main avenue from gate to house
     strip(60, 3, 0, 8); // east–west cross path
-    strip(3, 15, 28, 10.5); // pavilion steps ↔ dining hall
+    strip(3, 13, 28, 10); // studio steps ↔ alignment hall
     strip(3, 15, -30, 11.5); // residence door ↔ garden entry
     g.name = 'Paths';
     return g;
@@ -311,7 +342,8 @@ export class EstateBuilder {
     return g;
   }
 
-  _pavilion() {
+  /** Somatic Studio: open domed pavilion with a 5×5 grid of mats (centre left clear for staff). */
+  _studio() {
     const g = new THREE.Group();
     const base = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(9, 9.5, 0.8, 8), flat(PALETTE.stone)));
     base.position.y = 0.4;
@@ -325,19 +357,80 @@ export class EstateBuilder {
     }
     const dome = this._shadowed(new THREE.Mesh(new THREE.ConeGeometry(9.5, 3.5, 8), flat(PALETTE.roof)));
     dome.position.y = 7.5;
-    g.add(dome);
-    const pool = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 0.1, 8), flat(PALETTE.water, { roughness: 0.2 }));
-    pool.position.y = 0.85;
-    pool.receiveShadow = true;
-    g.add(pool);
+    g.add(this._cutaway(dome, 10));
+    const matGeo = new THREE.BoxGeometry(1.1, 0.05, 2.0);
+    const mats = new THREE.InstancedMesh(matGeo, flat(PALETTE.mat), 24);
+    mats.receiveShadow = true;
+    const m = new THREE.Matrix4();
+    let i = 0;
+    for (let r = -2; r <= 2; r++) {
+      for (let c = -2; c <= 2; c++) {
+        if (r === 0 && c === 0) continue;
+        mats.setMatrixAt(i++, m.makeTranslation(c * STUDIO.spacing, STUDIO.floor + 0.03, r * STUDIO.spacing));
+      }
+    }
+    g.add(mats);
     return g;
   }
 
+  /** Alignment Hall: low platform, timber posts and a gabled roof; open on all sides so lineups read. */
+  _hall() {
+    const g = new THREE.Group();
+    const w = 18, d = 14, h = 5;
+    const floor = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, HALL.floor, d), flat(PALETTE.stone)), false);
+    floor.position.y = HALL.floor / 2;
+    g.add(floor);
+    const postMat = flat(PALETTE.timber);
+    for (const x of [-w / 2 + 0.4, 0, w / 2 - 0.4]) {
+      for (const z of [-d / 2 + 0.4, d / 2 - 0.4]) {
+        const post = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.4, h, 0.4), postMat));
+        post.position.set(x, HALL.floor + h / 2, z);
+        g.add(post);
+      }
+    }
+    // Gabled roof: a triangular prism along X.
+    const roofGeo = new THREE.CylinderGeometry(1, 1, 1, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2); // apex up, ridge along X
+    const roof = this._shadowed(new THREE.Mesh(roofGeo, flat(PALETTE.roof)));
+    roof.scale.set(w + 1, 2.4, (d + 1.5) / Math.sqrt(3));
+    roof.position.y = HALL.floor + h + 1.2;
+    g.add(this._cutaway(roof, 11));
+    // Painted lineup marks.
+    const markMat = new THREE.MeshBasicMaterial({ color: 0xf4efe6 });
+    for (const z of [21.5, 24, 26.5, 29]) {
+      const mark = new THREE.Mesh(new THREE.BoxGeometry(14, 0.02, 0.08), markMat);
+      mark.position.set(0, HALL.floor + 0.01, z - HALL.z + 0.45);
+      g.add(mark);
+    }
+    return g;
+  }
+
+  /** Sunken Courtyard: raked gravel bowl round the fountain, ringed by a low stone step. */
   _courtyard() {
     const g = new THREE.Group();
-    const plaza = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 0.2, 12), flat(PALETTE.path)), false);
-    plaza.position.y = 0.1;
-    g.add(plaza);
+    const R = COURTYARD.radius;
+    const gravel = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.2, 24), flat(PALETTE.gravel)), false);
+    gravel.position.y = 0.1;
+    g.add(gravel);
+    // Raked rings.
+    const lineMat = new THREE.MeshBasicMaterial({ color: PALETTE.gravelLine });
+    for (const r of [4.2, 5.8, 7.0, 8.2, 9.4]) {
+      const line = new THREE.Mesh(new THREE.RingGeometry(r - 0.06, r + 0.06, 40).rotateX(-Math.PI / 2), lineMat);
+      line.position.y = 0.205;
+      g.add(line);
+    }
+    // Step ring with openings where the four paths come in.
+    const stepMat = flat(PALETTE.stone);
+    const segs = 24;
+    for (let i = 0; i < segs; i++) {
+      const a = ((i + 0.5) / segs) * Math.PI * 2;
+      const nearPath = [0, 0.5, 1, 1.5].some((k) => Math.abs(Math.atan2(Math.sin(a - k * Math.PI), Math.cos(a - k * Math.PI))) < 0.2);
+      if (nearPath) continue;
+      const len = 2 * (R + 0.8) * Math.sin(Math.PI / segs);
+      const step = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(len + 0.05, 0.35, 1.0), stepMat));
+      step.position.set(Math.cos(a) * (R + 0.8), 0.175, Math.sin(a) * (R + 0.8));
+      step.rotation.y = -a + Math.PI / 2;
+      g.add(step);
+    }
     const basin = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(3, 3.4, 1, 8), flat(PALETTE.stone)));
     basin.position.y = 0.6;
     g.add(basin);
@@ -347,6 +440,26 @@ export class EstateBuilder {
     const spout = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.5, 2.4, 6), flat(PALETTE.stone)));
     spout.position.y = 2;
     g.add(spout);
+    return g;
+  }
+
+  /** Assembly Lawn: a low dais on the avenue south of the courtyard; residents line up facing it. */
+  _lawn() {
+    const g = new THREE.Group();
+    const dais = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(10, LAWN.dais, 3), flat(PALETTE.stone)));
+    dais.position.set(0, LAWN.dais / 2, LAWN.daisZ);
+    g.add(dais);
+    const step = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(4, LAWN.dais / 2, 0.8), flat(PALETTE.stone)));
+    step.position.set(0, LAWN.dais / 4, LAWN.daisZ - 1.9);
+    g.add(step);
+    const banner = this._shadowed(new THREE.Mesh(new THREE.BoxGeometry(6, 2.2, 0.15), flat(PALETTE.trim)));
+    banner.position.set(0, LAWN.dais + 1.6, LAWN.daisZ + 1.3);
+    g.add(banner);
+    for (const x of [-3.2, 3.2]) {
+      const pole = this._shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.4, 5), flat(PALETTE.timber)));
+      pole.position.set(x, LAWN.dais + 1.7, LAWN.daisZ + 1.3);
+      g.add(pole);
+    }
     return g;
   }
 
@@ -428,6 +541,7 @@ export class EstateBuilder {
     this._updateKeyboardCamera(dt);
     this.controls.update();
     this._clampTarget();
+    this._updateCutaways(dt);
   }
 
   render() {

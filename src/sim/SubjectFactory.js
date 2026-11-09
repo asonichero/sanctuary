@@ -1,43 +1,48 @@
 import * as THREE from 'three';
 import { Random } from '../core/Random.js';
+import {
+  ROLES, TIERS, TRAITS, STATES, STARTING_STATS, NEWCOMER_SHARE, FIRST_NAMES, LAST_NAMES, SKIN_TONES,
+} from '../content/roster.js';
+import { BANDS } from '../content/composure.js';
+import { bandOf } from './composureRules.js';
 
 /**
- * SubjectFactory — procedural resident generation.
+ * SubjectFactory — procedural residents and staff.
  *
- * A resident is a plain data record (identity, traits, needs, composure,
- * attendance history, movement state) plus a low-poly mesh. Systems mutate
- * the record; `syncMesh` pushes the visible state onto the mesh each frame.
+ * Every agent is a low-poly athletic mannequin (tank top, compression shorts
+ * or leggings, trainers) in its tier's colours: SLATE newcomers, OCHRE
+ * intermediates, CHARCOAL staff.
+ *
+ * Core state lives on `mesh.userData` as plain JSON (the same object as
+ * `agent.sim`):
+ *   { id, role, tier, trait, stats: { composure, fatigue, defiance }, state, assignedSocket }
+ * Runtime-only fields (position, path, plan, rig) stay on the agent record so
+ * userData stays cloneable and serialisable.
  */
 
-const FIRST_NAMES = [
-  'Ada', 'Bram', 'Celia', 'Dorian', 'Elise', 'Felix', 'Greta', 'Hugo', 'Iris', 'Jonah',
-  'Kira', 'Leon', 'Mara', 'Nico', 'Odile', 'Pascal', 'Quinn', 'Rosa', 'Silas', 'Tess',
-  'Ulric', 'Vera', 'Wren', 'Xavi', 'Yara', 'Zane', 'Alba', 'Cyrus', 'Delphine', 'Emil',
-];
-const LAST_NAMES = [
-  'Ashdown', 'Bellweather', 'Calloway', 'Dunmore', 'Everly', 'Fairhurst', 'Garrow', 'Hartwell',
-  'Ingram', 'Jessop', 'Kestrel', 'Lockwood', 'Marlowe', 'Northcott', 'Oakley', 'Penhallow',
-  'Quarles', 'Ravenscroft', 'Sutherby', 'Thorne', 'Underhill', 'Vane', 'Whitlock', 'Yardley',
-];
+export const ANIM = Object.freeze({
+  IDLE: 'idle', WALK: 'walk', HIDDEN: 'hidden',
+  STAND: 'stand', // lineup / assembly: at attention
+  HOLD: 'hold', // static hold on a mat: arms out
+  RAKE: 'rake', // groundskeeping
+  SUPERVISE: 'supervise', // staff at a post: hands behind back
+});
 
-/** Residents are grouped into cohorts that share a tunic colour and dormitory floor. */
-export const COHORTS = Object.freeze([
-  { id: 'linden', name: 'Linden', color: 0x6f8fa8 },
-  { id: 'cedar', name: 'Cedar', color: 0xa8746f },
-  { id: 'birch', name: 'Birch', color: 0x8fa86f },
-]);
-
-const SKIN_TONES = [0xf1d3b8, 0xe0b48f, 0xc68d65, 0x9c6a47, 0x6e4a33, 0xf5dcc8];
-const HAIR_TONES = [0x2b2118, 0x4a3324, 0x7a5a3a, 0xb08a5a, 0x1c1c1c, 0x9a9a9a];
-
-export const ANIM = Object.freeze({ IDLE: 'idle', WALK: 'walk', SEATED: 'seated', HIDDEN: 'hidden' });
-
-// Shared geometry: every resident reuses these buffers.
+// Shared geometry (local units; the root is scaled for camera distance).
 const GEO = {
-  body: new THREE.CapsuleGeometry(0.42, 0.9, 3, 8).translate(0, 0.87, 0),
-  head: new THREE.IcosahedronGeometry(0.34, 1).translate(0, 1.92, 0),
-  hair: new THREE.IcosahedronGeometry(0.36, 0).translate(0, 2.02, -0.04),
-  ring: new THREE.RingGeometry(0.55, 0.7, 16).rotateX(-Math.PI / 2).translate(0, 0.04, 0),
+  pelvis: new THREE.CylinderGeometry(0.19, 0.21, 0.24, 6).translate(0, -0.06, 0).scale(1, 1, 0.75),
+  thigh: new THREE.CylinderGeometry(0.105, 0.085, 0.5, 6).translate(0, -0.25, 0),
+  shin: new THREE.CylinderGeometry(0.08, 0.055, 0.46, 6).translate(0, -0.23, 0),
+  shoe: new THREE.BoxGeometry(0.12, 0.08, 0.26).translate(0, -0.5, 0.05),
+  torso: new THREE.CylinderGeometry(0.27, 0.2, 0.62, 6).translate(0, 0.31, 0).scale(1, 1, 0.68),
+  neck: new THREE.CylinderGeometry(0.065, 0.075, 0.14, 5).translate(0, 0.68, 0),
+  head: new THREE.IcosahedronGeometry(0.16, 1).scale(0.92, 1.08, 1).translate(0, 0.88, 0),
+  upperArm: new THREE.CylinderGeometry(0.06, 0.052, 0.32, 5).translate(0, -0.16, 0),
+  forearm: new THREE.CylinderGeometry(0.05, 0.042, 0.29, 5).translate(0, -0.145, 0),
+  hand: new THREE.IcosahedronGeometry(0.05, 0).translate(0, -0.32, 0),
+  rakeHandle: new THREE.CylinderGeometry(0.018, 0.018, 1.5, 4).translate(0, -0.4, 0),
+  rakeHead: new THREE.BoxGeometry(0.42, 0.05, 0.06).translate(0, -1.15, 0),
+  ring: new THREE.RingGeometry(0.5, 0.72, 20).rotateX(-Math.PI / 2).translate(0, 0.05, 0),
 };
 const materialCache = new Map();
 const mat = (color) => {
@@ -46,59 +51,75 @@ const mat = (color) => {
   }
   return materialCache.get(color);
 };
+const BAND_COLORS = Object.fromEntries(Object.values(BANDS).map((b) => [b.id, new THREE.Color(b.color)]));
 
-const clamp = (x, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, x));
+const randIn = (rng, [lo, hi]) => rng.range(lo, hi);
 
 export class SubjectFactory {
-  /**
-   * @param {object} opts
-   * @param {number|string} opts.seed  same seed ⇒ same roster
-   */
+  /** @param {{ seed?: number|string }} opts  same seed ⇒ same roster */
   constructor({ seed = 'sanctuary-alpha' } = {}) {
     this.rng = new Random(seed);
-    this._serial = 0;
+    this._serial = { RESIDENT: 0, STAFF: 0 };
     this._usedNames = new Set();
   }
 
-  /** Create `count` residents spread evenly across cohorts. */
-  createRoster(count) {
-    return Array.from({ length: count }, (_, i) => this.create({ cohort: COHORTS[i % COHORTS.length] }));
+  /** `count` residents with an even spread of traits and ~60% newcomers. */
+  createResidents(count) {
+    const traitIds = Object.keys(TRAITS);
+    const newcomers = Math.round(count * NEWCOMER_SHARE);
+    const order = this.rng.fork('roster').shuffle([...Array(count).keys()]);
+    return Array.from({ length: count }, (_, i) =>
+      this.create({
+        role: ROLES.RESIDENT,
+        trait: traitIds[i % traitIds.length],
+        tier: order[i] < newcomers ? 'SLATE' : 'OCHRE',
+      }),
+    );
   }
 
-  create({ cohort } = {}) {
-    const rng = this.rng.fork(`resident-${this._serial}`);
-    const serial = ++this._serial;
-    cohort ??= rng.pick(COHORTS);
+  createStaff(count) {
+    return Array.from({ length: count }, () => this.create({ role: ROLES.STAFF }));
+  }
 
-    const traits = {
-      punctuality: rng.trait(0.6), // how early they leave for scheduled blocks
-      sociability: rng.trait(0.5), // preference for shared spaces in free time
-      stamina: rng.trait(0.55), // walking speed and energy drain
-      temperament: rng.trait(0.5), // how quickly composure reacts to needs (higher = steadier)
+  create({ role = ROLES.RESIDENT, tier, trait } = {}) {
+    const staff = role === ROLES.STAFF;
+    const serial = ++this._serial[role];
+    const id = `${staff ? 'stf' : 'res'}_${String(serial).padStart(3, '0')}`;
+    const rng = this.rng.fork(id);
+    tier = staff ? 'CHARCOAL' : tier ?? (rng.chance(NEWCOMER_SHARE) ? 'SLATE' : 'OCHRE');
+    trait ??= staff ? 'OVERACHIEVER' : rng.pick(Object.keys(TRAITS));
+
+    const range = STARTING_STATS[tier];
+    /** Spec'd core state — this exact object becomes mesh.userData. */
+    const sim = {
+      id,
+      role,
+      tier,
+      trait,
+      stats: {
+        composure: Math.round(randIn(rng, range.composure)),
+        fatigue: Math.round(randIn(rng, range.fatigue)),
+        defiance: Math.round(randIn(rng, range.defiance)),
+      },
+      state: STATES.SCHEDULED_TASK,
+      assignedSocket: null,
     };
 
-    const resident = {
-      id: `R-${String(serial).padStart(3, '0')}`,
+    const agent = {
+      id,
+      sim,
       name: this._uniqueName(rng),
-      age: rng.int(23, 58),
-      cohort: cohort.id,
-      room: `${cohort.name} ${rng.int(1, 3)}${String(rng.int(1, 12)).padStart(2, '0')}`,
-      traits,
-      needs: {
-        energy: rng.range(70, 95),
-        hunger: rng.range(45, 70), // 100 = fully fed
-        social: rng.range(40, 80),
-        calm: rng.range(50, 85),
-      },
-      composure: rng.range(55, 80),
-      record: { onTime: 0, late: 0, missed: 0 },
-      today: {}, // blockId -> 'onTime' | 'late' | 'missed'
+      // Hidden per-agent variation (kept off userData).
+      punctuality: staff ? 1 : Math.min(1, Math.max(0, TRAITS[trait].punctuality + rng.gaussian(0, 0.12))),
+      steadiness: staff ? 1 : rng.range(0.85, 1.15), // personal scale on composure loss
+      band: bandOf(sim.stats.composure),
+      activity: 'rest',
 
       // Movement / placement (owned by ScheduleSystem)
-      placement: { zone: 'Residence Wing', slot: null },
+      placement: { zone: staff ? 'Main House' : 'Residence Wing', slot: null },
       blockId: null,
       path: [],
-      walkSpeed: 11 + traits.stamina * 5, // world units per game minute
+      walkSpeed: staff ? 14 : 11 + rng.range(0, 5), // world units per game minute
       anim: ANIM.HIDDEN,
       position: new THREE.Vector3(),
       heading: rng.range(0, Math.PI * 2),
@@ -106,13 +127,13 @@ export class SubjectFactory {
 
       appearance: {
         skin: rng.pick(SKIN_TONES),
-        hair: rng.pick(HAIR_TONES),
-        tunic: cohort.color,
-        height: rng.range(0.92, 1.08),
+        legwear: staff || rng.chance(0.5) ? 'leggings' : 'shorts',
+        height: rng.range(0.94, 1.06) * (staff ? 1.03 : 1),
+        build: rng.range(0.92, 1.1), // shoulder/hip width
       },
     };
-    resident.mesh = this.buildMesh(resident);
-    return resident;
+    this.buildMesh(agent);
+    return agent;
   }
 
   _uniqueName(rng) {
@@ -123,67 +144,191 @@ export class SubjectFactory {
         return name;
       }
     }
-    return `${rng.pick(FIRST_NAMES)} ${rng.pick(LAST_NAMES)} ${this._serial}`;
+    return `${rng.pick(FIRST_NAMES)} ${rng.pick(LAST_NAMES)} ${this._usedNames.size}`;
   }
 
-  buildMesh(resident) {
-    const { skin, hair, tunic, height } = resident.appearance;
+  /** Build the jointed mannequin. Sets `agent.mesh` and `agent.rig`. */
+  buildMesh(agent) {
+    const { skin, legwear, height, build } = agent.appearance;
+    const kit = TIERS[agent.sim.tier];
+    const part = (geo, color, parent) => {
+      const m = new THREE.Mesh(geo, mat(color));
+      m.castShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const group = (parent, x = 0, y = 0, z = 0) => {
+      const g = new THREE.Group();
+      g.position.set(x, y, z);
+      parent.add(g);
+      return g;
+    };
+
     const root = new THREE.Group();
     root.scale.setScalar(1.25); // readable at management-camera distances
-    root.name = resident.id;
-    root.userData.residentId = resident.id;
+    root.name = agent.id;
+    root.userData = agent.sim;
 
-    const figure = new THREE.Group(); // animated part; root stays on the ground
-    figure.scale.setScalar(height);
-    const body = new THREE.Mesh(GEO.body, mat(tunic));
-    const head = new THREE.Mesh(GEO.head, mat(skin));
-    const hairMesh = new THREE.Mesh(GEO.hair, mat(hair));
-    for (const m of [body, head, hairMesh]) m.castShadow = true;
-    figure.add(body, head, hairMesh);
+    const figure = group(root); // bob / sway; root stays on the ground
+    figure.scale.set(build, height, build);
 
-    // Ground ring tinted by composure (management-sim status read-out).
-    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.75 });
+    // Hips and legs (hip pivot 1.0 above the ground).
+    const hips = group(figure, 0, 1.0, 0);
+    part(GEO.pelvis, kit.lower, hips);
+    const legs = [-1, 1].map((side) => {
+      const hip = group(hips, side * 0.11, -0.08, 0);
+      part(GEO.thigh, kit.lower, hip);
+      const knee = group(hip, 0, -0.5, 0);
+      part(GEO.shin, legwear === 'leggings' ? kit.lower : skin, knee);
+      part(GEO.shoe, kit.trim, knee);
+      return { hip, knee };
+    });
+
+    // Spine (waist pivot) carries torso, head and arms so slouching moves them together.
+    const spine = group(figure, 0, 1.0, 0);
+    part(GEO.torso, kit.top, spine);
+    part(GEO.neck, skin, spine);
+    const neck = group(spine, 0, 0.66, 0);
+    const head = part(GEO.head, skin, neck);
+    head.position.y = -0.66; // geometry is authored in spine space
+    const arms = [-1, 1].map((side) => {
+      const shoulder = group(spine, side * 0.31, 0.58, 0);
+      part(GEO.upperArm, skin, shoulder);
+      const elbow = group(shoulder, 0, -0.32, 0);
+      part(GEO.forearm, skin, elbow);
+      part(GEO.hand, skin, elbow);
+      return { shoulder, elbow, side };
+    });
+
+    // Rake (groundskeeping only), held in the right hand.
+    const rake = group(arms[0].elbow, 0, -0.3, 0);
+    part(GEO.rakeHandle, 0x8a6a48, rake);
+    part(GEO.rakeHead, 0x5d5f61, rake);
+    rake.visible = false;
+
+    // Aura ring: Cool Blue / Amber / Red (flashing). Staff have none.
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: BAND_COLORS[agent.band], transparent: true, opacity: 0.8, depthWrite: false,
+    });
     const ring = new THREE.Mesh(GEO.ring, ringMat);
+    ring.visible = agent.sim.role === ROLES.RESIDENT;
+    root.add(ring);
 
-    root.add(figure, ring);
-    root.userData.parts = { figure, ring, ringMat };
     root.visible = false;
+    agent.mesh = root;
+    agent.rig = { figure, hips, spine, neck, legs, arms, rake, ring, ringMat };
     return root;
   }
 
-  /** Push data-record state onto the mesh. Call once per frame. */
-  static syncMesh(resident, dtGame) {
-    const { mesh, position, anim } = resident;
-    const { figure, ringMat } = mesh.userData.parts;
+  /**
+   * Push record state onto the mesh: placement, animation, posture drift and
+   * aura. Call once per frame for every agent.
+   * @param {object} agent
+   * @param {{ dtGame:number, dtReal:number, time:number }} t  time = real seconds (for flashing while paused)
+   */
+  static syncMesh(agent, { dtGame, dtReal, time }) {
+    const { mesh, position, anim, rig, sim } = agent;
     mesh.visible = anim !== ANIM.HIDDEN;
     if (!mesh.visible) return;
 
     mesh.position.copy(position);
-    // Smoothly turn toward heading.
-    const diff = Math.atan2(Math.sin(resident.heading - mesh.rotation.y), Math.cos(resident.heading - mesh.rotation.y));
+    const diff = Math.atan2(Math.sin(agent.heading - mesh.rotation.y), Math.cos(agent.heading - mesh.rotation.y));
     mesh.rotation.y += diff * Math.min(1, dtGame * 6);
 
-    resident._phase += dtGame * (anim === ANIM.WALK ? 9 : 1.2);
-    if (anim === ANIM.WALK) {
-      figure.position.y = Math.abs(Math.sin(resident._phase)) * 0.12;
-      figure.rotation.z = Math.sin(resident._phase) * 0.06;
-      figure.scale.y = resident.appearance.height;
-    } else if (anim === ANIM.SEATED) {
-      figure.position.y = -0.35;
-      figure.rotation.z = 0;
-      figure.scale.y = resident.appearance.height * 0.92;
-    } else {
-      // idle breathing
-      figure.position.y = 0;
-      figure.rotation.z = 0;
-      figure.scale.y = resident.appearance.height * (1 + Math.sin(resident._phase) * 0.012);
+    agent._phase += dtGame * (anim === ANIM.WALK ? 9 : anim === ANIM.RAKE ? 2.2 : 1.2);
+    const ph = agent._phase;
+    const { composure, fatigue, defiance } = sim.stats;
+
+    // Posture drift: below 70 composure the spine rounds and the head drops.
+    // Slouchers show it more; staff hold their line.
+    const traitSlump = sim.trait === 'SLOUCHER' ? 1.3 : 1;
+    const slump = sim.role === ROLES.STAFF ? 0 : Math.min(1, Math.max(0, (70 - composure) / 70) * traitSlump);
+    const tired = fatigue / 100;
+
+    const P = {
+      figY: 0, figZ: 0, spineX: slump * 0.42, neckX: slump * 0.35,
+      legs: [0, 0], knees: [0, 0],
+      arms: [{ x: slump * 0.25, z: 0.1, e: 0 }, { x: slump * 0.25, z: 0.1, e: 0 }],
+      rake: false,
+    };
+
+    switch (anim) {
+      case ANIM.WALK: {
+        const s = Math.sin(ph);
+        P.figY = Math.abs(s) * 0.06;
+        P.legs = [s * 0.5, -s * 0.5];
+        P.knees = [Math.max(0, -s) * 0.6, Math.max(0, s) * 0.6];
+        P.arms[0].x += -s * 0.45;
+        P.arms[1].x += s * 0.45;
+        P.arms[0].e = P.arms[1].e = -0.25;
+        P.spineX = slump * 0.3 + 0.05;
+        break;
+      }
+      case ANIM.HOLD: {
+        // Arms out to the sides; they droop with low composure and shake with fatigue.
+        const lift = Math.PI / 2 - slump * 0.8 - tired * 0.25;
+        const shake = Math.sin(ph * 9) * tired * 0.06;
+        P.arms[0].z = lift + shake;
+        P.arms[1].z = lift - shake;
+        P.arms[0].x = P.arms[1].x = 0;
+        P.legs = [-0.12, 0.12]; // feet apart
+        P.spineX = slump * 0.5;
+        break;
+      }
+      case ANIM.RAKE: {
+        const s = Math.sin(ph);
+        P.spineX = 0.28 + slump * 0.25 + s * 0.06;
+        P.arms[0].x = P.arms[1].x = -0.75 + s * 0.3;
+        P.arms[0].e = P.arms[1].e = -0.5;
+        P.arms[1].z = -0.25;
+        P.legs = [0.25, -0.15];
+        P.knees = [0.15, 0.05];
+        P.rake = true;
+        break;
+      }
+      case ANIM.SUPERVISE: {
+        P.arms[0].x = P.arms[1].x = 0.35;
+        P.arms[0].e = P.arms[1].e = -1.3;
+        P.arms[0].z = P.arms[1].z = 0.05;
+        break;
+      }
+      case ANIM.STAND:
+      default: {
+        // At attention; a restless resident shifts weight more the more defiant they are.
+        P.figY = Math.sin(ph) * 0.006;
+        if (sim.trait === 'RESTLESS') P.figZ = Math.sin(ph * 1.7) * (0.02 + (defiance / 100) * 0.08);
+        P.arms[0].z = P.arms[1].z = 0.06;
+        break;
+      }
     }
 
-    ringMat.color.setHSL((clamp(resident.composure) / 100) * 0.33, 0.55, 0.5); // red → green
-  }
+    rig.figure.position.y = P.figY;
+    rig.figure.rotation.z = P.figZ;
+    rig.spine.rotation.x = P.spineX;
+    rig.neck.rotation.x = P.neckX;
+    rig.legs.forEach((l, i) => {
+      l.hip.rotation.x = P.legs[i];
+      l.knee.rotation.x = P.knees[i];
+    });
+    rig.arms.forEach((a, i) => {
+      const p = P.arms[i];
+      a.shoulder.rotation.set(p.x, 0, a.side * p.z);
+      a.elbow.rotation.x = p.e;
+    });
+    rig.rake.visible = P.rake;
+    if (P.rake) rig.rake.rotation.set(0.9, 0, 0.35);
 
-  static clampNeeds(resident) {
-    for (const k of Object.keys(resident.needs)) resident.needs[k] = clamp(resident.needs[k]);
-    resident.composure = clamp(resident.composure);
+    // Aura: ease toward the band colour; red flashes (in real time, so it reads while paused).
+    if (rig.ring.visible) {
+      rig.ringMat.color.lerp(BAND_COLORS[agent.band], Math.min(1, dtReal * 6));
+      if (agent.band === 'RED') {
+        const pulse = 0.5 + 0.5 * Math.sin(time * 7);
+        rig.ringMat.opacity = 0.35 + 0.65 * pulse;
+        rig.ring.scale.setScalar(1 + pulse * 0.25);
+      } else {
+        rig.ringMat.opacity = 0.75;
+        rig.ring.scale.setScalar(1);
+      }
+    }
   }
 }
