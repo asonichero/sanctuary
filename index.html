@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sanctuary: Wellness & Composure</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="bg-stone-900 text-stone-100 overflow-hidden select-none">
+    <!-- 3D viewport -->
+    <div id="viewport" class="fixed inset-0"></div>
+
+    <!-- HUD overlay (pointer-events only on interactive children) -->
+    <div id="hud" class="fixed inset-0 pointer-events-none flex flex-col justify-between p-4">
+      <header class="flex items-start justify-between gap-4">
+        <div class="hud-panel pointer-events-auto">
+          <h1 class="text-sm font-semibold tracking-[0.2em] uppercase text-amber-200">Sanctuary</h1>
+          <p class="text-xs text-stone-400">Wellness &amp; Composure · Alpha</p>
+        </div>
+        <div class="hud-panel pointer-events-auto text-right">
+          <p class="text-xs text-stone-400">Day <span id="hud-day">1</span></p>
+          <p class="text-lg font-mono" id="hud-clock">06:00</p>
+        </div>
+      </header>
+
+      <footer class="flex items-end justify-between gap-4">
+        <div class="hud-panel pointer-events-auto text-xs text-stone-400 leading-relaxed">
+          <p><kbd>LMB</kbd> drag · orbit &nbsp; <kbd>RMB</kbd> drag · pan &nbsp; <kbd>Wheel</kbd> · zoom</p>
+          <p><kbd>WASD</kbd> · move focus &nbsp; <kbd>Q</kbd>/<kbd>E</kbd> · rotate &nbsp; <kbd>F</kbd> · reset view</p>
+        </div>
+        <div id="hud-fps" class="hud-panel font-mono text-xs text-stone-500">-- fps</div>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
