@@ -33,7 +33,9 @@
             <p id="hud-queued" class="mt-1"></p>
             <p class="mt-3 text-stone-400">Today</p>
             <p id="hud-attendance"></p>
+            <p class="mt-1 text-stone-500">Patrol checks: <span id="hud-patrols" class="font-mono text-stone-300">0</span></p>
           </div>
+          <div id="hud-pinned" class="hud-panel pointer-events-auto w-64 text-xs" hidden></div>
         </div>
 
         <div class="flex flex-col items-end gap-3">
@@ -57,12 +59,12 @@
 
       <footer class="flex items-end justify-between gap-4">
         <div class="hud-panel pointer-events-auto text-xs text-stone-400 leading-relaxed">
-          <p><kbd>LMB</kbd> drag · orbit &nbsp; <kbd>RMB</kbd> drag · pan &nbsp; <kbd>Wheel</kbd> · zoom</p>
-          <p><kbd>WASD</kbd> · move focus &nbsp; <kbd>Q</kbd>/<kbd>E</kbd> · rotate &nbsp; <kbd>F</kbd> · reset view</p>
+          <p><kbd>WASD</kbd> · walk &nbsp; <kbd>Shift</kbd> · sprint &nbsp; <kbd>Mouse</kbd> · look &nbsp; <kbd>Esc</kbd> · release mouse</p>
+          <p><kbd>LMB</kbd> · patrol check &nbsp; <kbd>RMB</kbd> hold · actions &nbsp; <kbd>I</kbd> · unpin &nbsp; <kbd>Tab</kbd> · roster</p>
           <p><kbd>Space</kbd> · pause &nbsp; <kbd>1</kbd>–<kbd>3</kbd> · speed · day runs 07:00–18:00</p>
         </div>
         <div class="flex items-end gap-3">
-          <details class="hud-panel pointer-events-auto text-xs hidden lg:block" open>
+          <details id="hud-roster-panel" class="hud-panel pointer-events-auto text-xs hidden" open>
             <summary class="cursor-pointer text-stone-400">Roster (lowest composure first) · fatigue · composure</summary>
             <div class="mt-1 max-h-52 w-[26rem] overflow-y-auto">
               <table class="w-full"><tbody id="hud-roster"></tbody></table>
@@ -71,6 +73,20 @@
           <div id="hud-fps" class="hud-panel font-mono text-xs text-stone-500">-- fps</div>
         </div>
       </footer>
+    </div>
+
+    <!-- First-person overlay -->
+    <div class="pointer-events-none fixed inset-0 flex items-center justify-center">
+      <div id="crosshair" class="crosshair"></div>
+    </div>
+    <div id="radial" class="radial" hidden></div>
+    <div id="hud-target" class="target-card" hidden></div>
+    <ul id="hud-toasts" class="toasts"></ul>
+    <div id="lock-prompt" class="lock-prompt">
+      <div class="hud-panel text-center">
+        <p class="text-sm text-amber-200 tracking-[0.2em] uppercase">Walk the grounds</p>
+        <p class="mt-1 text-xs text-stone-300">Click to take the mouse · <kbd>Esc</kbd> to let go</p>
+      </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

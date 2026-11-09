@@ -4,6 +4,8 @@ import { NavGraph, ZONES } from '../world/NavGraph.js';
 import { ANIM } from './SubjectFactory.js';
 import { TIMETABLE, LATE_GRACE, blockAt, nextBlock } from '../content/timetable.js';
 import { ROLES } from '../content/roster.js';
+import { ACTIONS } from '../content/interactions.js';
+import { blockedReason, stamp } from './interactionRules.js';
 
 /** Animation an agent settles into on arriving for a block, by activity kind. */
 const ARRIVE_ANIM = { alignment: ANIM.STAND, hold: ANIM.HOLD, work: ANIM.RAKE, assembly: ANIM.STAND };
@@ -19,7 +21,9 @@ const ARRIVE_ANIM = { alignment: ANIM.STAND, hold: ANIM.HOLD, work: ANIM.RAKE, a
  * the grace window) or missed. Every frame it publishes `agent.activity`
  * ('walking', a block kind, or 'idle') for the composure rules to read.
  *
- * Stats are not touched here; ComposureSystem owns them.
+ * It also carries out the player's movement-type interactions: a stretch
+ * break (activity override in place) and send-to-rest (excused to their bed
+ * until the block ends). Stats are not touched here; ComposureSystem owns them.
  */
 export class ScheduleSystem {
   constructor({ agents, scene, clock, seed = 'sanctuary-alpha' }) {
@@ -31,23 +35,25 @@ export class ScheduleSystem {
     this.seed = seed;
     this.today = { onTime: 0, late: 0, missed: 0 };
 
-    for (const a of agents) {
-      a.position.copy(this.nav.placementPosition(a.placement));
-      scene.add(a.mesh);
-    }
-
+    for (const a of agents) scene.add(a.mesh);
+    this._homeAll();
     this._planDay(clock.day);
     this._syncInitialBlock();
 
     this._off = [
       bus.on(Events.CLOCK_MINUTE, (e) => this._onMinute(e)),
       bus.on(Events.CLOCK_DAY, ({ day }) => this._onNewDay(day)),
+      bus.on(Events.INTERACT, ({ action, agent }) => this._onInteract(action, agent)),
     ];
     bus.emit(Events.AGENTS_SPAWNED, { agents, residents: this.residents, staff: this.staff });
   }
 
   static isStaff(a) {
     return a.sim.role === ROLES.STAFF;
+  }
+
+  static homeZone(a) {
+    return ScheduleSystem.isStaff(a) ? 'Main House' : 'Residence Wing';
   }
 
   zoneFor(a, block) {
@@ -100,12 +106,21 @@ export class ScheduleSystem {
 
   /** A new day opens: everyone wakes at home (stragglers are put to bed). */
   _onNewDay(day) {
+    this._homeAll();
+    this._planDay(day);
+  }
+
+  /** Put every agent on a bed / post in their home building. */
+  _homeAll() {
     for (const a of this.agents) {
       this.nav.releaseSlot(a.placement.zone, a.placement.slot);
-      this._place(a, { zone: ScheduleSystem.isStaff(a) ? 'Main House' : 'Residence Wing', slot: null });
+      const zone = ScheduleSystem.homeZone(a);
+      this._place(a, { zone, slot: this._claim(a, zone) });
       a.blockId = null;
+      a.override = null;
+      a.excusedUntil = null;
+      this._settle(a, null);
     }
-    this._planDay(day);
   }
 
   _closeBlock(block, day) {
@@ -120,6 +135,10 @@ export class ScheduleSystem {
     const current = blockAt(now);
     let target = null;
 
+    if (a.excusedUntil != null) {
+      if (now < a.excusedUntil) return; // sent to rest by the player
+      a.excusedUntil = null;
+    }
     if (current && a.blockId === current.id) {
       if (current.mandatory) return; // nobody leaves a mandatory block early
     }
@@ -143,12 +162,18 @@ export class ScheduleSystem {
 
   _previewPath(a, zone) {
     const z = ZONES[zone];
-    return this.nav.buildPath(a.placement, { zone, slot: z.indoor ? null : { via: [], ...z.slots[0] } });
+    const sock = (ScheduleSystem.isStaff(a) && z.posts?.[0]) || z.slots?.[0] || z.posts?.[0];
+    return this.nav.buildPath(a.placement, { zone, slot: sock ? { via: [], ...sock } : null });
   }
 
   _sendTo(a, block) {
-    const zone = a.plan[block.id].zone;
-    a.blockId = block.id;
+    this._dispatch(a, a.plan[block.id].zone, block);
+  }
+
+  /** Walk `a` to `zone` for `block` (block may be null). */
+  _dispatch(a, zone, block) {
+    a.blockId = block?.id ?? null;
+    a.override = null;
 
     if (zone === a.placement.zone && !a.path.length) {
       this._arrive(a, block); // already there
@@ -168,7 +193,7 @@ export class ScheduleSystem {
   _arrive(a, block) {
     a.path = [];
     this._settle(a, block);
-    if (!ScheduleSystem.isStaff(a) && block.mandatory && !a.today[block.id]) {
+    if (!ScheduleSystem.isStaff(a) && block?.mandatory && !a.today[block.id]) {
       const lateBy = Math.floor(this.clock.minuteOfDay) - block.start; // whole minutes
       const status = lateBy <= 0 ? 'onTime' : lateBy <= LATE_GRACE ? 'late' : 'missed';
       this._recordAttendance(a, block, status);
@@ -178,18 +203,61 @@ export class ScheduleSystem {
   /** Pose and facing once in place. */
   _settle(a, block) {
     const zone = ZONES[a.placement.zone];
-    if (zone.indoor) {
-      a.anim = ANIM.HIDDEN;
+    const slot = a.placement.slot;
+    if (!slot) {
+      a.anim = ANIM.HIDDEN; // no socket to stand at (shouldn't happen with the current zones)
       return;
     }
     const staff = ScheduleSystem.isStaff(a);
-    a.anim = staff ? ANIM.SUPERVISE : ARRIVE_ANIM[block?.kind] ?? ANIM.IDLE;
+    if (staff) a.anim = ANIM.SUPERVISE;
+    else if (zone.indoor) a.anim = ANIM.SEATED; // on the edge of their bed
+    else a.anim = ARRIVE_ANIM[block?.kind] ?? ANIM.IDLE;
+
+    if (slot.face != null) {
+      a.heading = slot.face;
+      return;
+    }
     const look = staff ? zone.crowd : zone.focus;
     if (look) {
       let h = Math.atan2(look.x - a.position.x, look.z - a.position.z);
       if (!staff && block?.kind === 'work') h += Math.PI / 2; // rake along the ring, not at the fountain
       a.heading = h;
     }
+  }
+
+  // ------------------------------------------------------- player actions
+  /** Context the interaction rules need about an agent right now. */
+  interactionContext(a) {
+    return {
+      now: this.clock.total,
+      walking: a.path.length > 0,
+      indoor: !!ZONES[a.placement.zone].indoor,
+      stretching: a.override?.kind === 'stretch' && this.clock.total < a.override.until,
+    };
+  }
+
+  _onInteract(action, a) {
+    if (action !== 'stretch' && action !== 'rest') return;
+    const ctx = this.interactionContext(a);
+    const reason = blockedReason(a, action, ctx);
+    if (reason) {
+      bus.emit(Events.INTERACT_RESULT, { action, agent: a, ok: false, message: reason });
+      return;
+    }
+    stamp(a, action, ctx.now);
+    if (action === 'stretch') {
+      a.override = { kind: 'stretch', until: ctx.now + ACTIONS.stretch.duration };
+      a.anim = ANIM.STRETCH;
+      bus.emit(Events.INTERACT_RESULT, { action, agent: a, ok: true, message: `${a.name} takes a ${ACTIONS.stretch.duration}-minute stretch` });
+      return;
+    }
+    // Send to rest: excused until the current block (or the next one, in a transition) ends.
+    const now = this.clock.minuteOfDay;
+    const block = blockAt(now) ?? nextBlock(now);
+    a.today[block.id] ??= 'excused';
+    a.excusedUntil = block.end;
+    this._dispatch(a, ScheduleSystem.homeZone(a), block);
+    bus.emit(Events.INTERACT_RESULT, { action, agent: a, ok: true, message: `${a.name} heads back to rest until ${block.label} ends` });
   }
 
   _recordAttendance(r, block, status) {
@@ -203,7 +271,7 @@ export class ScheduleSystem {
     a.sim.assignedSocket = placement.slot?.id ?? null;
     a.position.copy(this.nav.placementPosition(placement));
     a.path = [];
-    a.anim = ZONES[placement.zone].indoor ? ANIM.HIDDEN : ANIM.IDLE;
+    a.anim = placement.slot ? ANIM.IDLE : ANIM.HIDDEN;
   }
 
   // -------------------------------------------------------------- per frame
@@ -212,14 +280,20 @@ export class ScheduleSystem {
     const block = blockAt(this.clock.minuteOfDay);
     for (const a of this.agents) {
       if (dtGame > 0 && a.path.length) this._walk(a, dtGame);
+      if (a.override && this.clock.total >= a.override.until) {
+        a.override = null; // stretch over: back to the block's pose
+        this._settle(a, TIMETABLE.find((b) => b.id === a.blockId));
+      }
       a.activity = this._activityOf(a, block);
     }
   }
 
   _activityOf(a, block) {
     if (a.path.length) return 'walking';
+    if (a.override) return a.override.kind;
+    if (ZONES[a.placement.zone].indoor) return 'rest';
     if (block && a.blockId === block.id) return block.kind;
-    return ZONES[a.placement.zone].indoor ? 'rest' : 'idle';
+    return 'idle';
   }
 
   _walk(a, dtGame) {

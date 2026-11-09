@@ -7,8 +7,9 @@ import * as THREE from 'three';
  *   current slot → (interior path reversed) → zone node → graph route →
  *   destination node → interior path → destination slot.
  *
- * Indoor zones end at the door: the resident is hidden on arrival and
- * reappears at the door when they leave.
+ * Indoor zones (the Main House atrium, the Residence Wing) are walkable:
+ * agents go through the door and down the hallway to a bed or a post, and the
+ * player can follow them in.
  */
 
 const v = (x, z, y = 0) => new THREE.Vector3(x, y, z);
@@ -42,7 +43,44 @@ const EDGES = [
  * Slot generators return [{ pos, via: Vector3[] }] — `via` runs from the zone
  * node to the slot. `slots` are residents' sockets, `posts` the staff's.
  */
-const slot = (pos, via = []) => ({ pos, via });
+const slot = (pos, via = [], face) => ({ pos, via, face });
+
+/** Main House: glass-and-stone atrium with a reception desk; staff posts behind it. */
+export const HOUSE = { x: 0, z: -22, w: 28, d: 16, h: 9, floor: 0.15, doorHalf: 2, deskZ: -20 };
+function housePosts() {
+  const f = HOUSE.floor;
+  const via = [v(0, -15.4, f), v(-4.8, -17.5, f), v(-4.8, -21.6, f)];
+  return [-2.4, 0, 2.4].map((x) => slot(v(x, -21.4, f), via, 0)); // face the door (+Z)
+}
+
+/**
+ * Residence Wing: a central hallway (x = -30) with four rooms either side,
+ * three beds per room. Residents sit on the hallway edge of their bed.
+ */
+export const RESIDENCE = {
+  x: -30, z: -8, w: 12, d: 24, h: 7, floor: 0.15,
+  hallHalf: 1.3, rooms: [-17.25, -11.75, -6.25, -0.75], roomDepth: 5.5, doorHalf: 1.2,
+};
+export const residenceBeds = () => {
+  const R = RESIDENCE;
+  const beds = [];
+  for (const side of [-1, 1]) {
+    const bedX = R.x + side * (R.w / 2 - 0.2 - 1.0);
+    for (const cz of R.rooms) for (const dz of [-1.7, 0, 1.7]) beds.push({ side, x: bedX, z: cz + dz, cz });
+  }
+  return beds;
+};
+function residenceSlots() {
+  const R = RESIDENCE;
+  const f = R.floor;
+  return residenceBeds().map(({ side, x, z, cz }) =>
+    slot(
+      v(x - side * 0.7, z, f),
+      [v(R.x, R.z + R.d / 2 - 1, f), v(R.x, cz, f), v(R.x + side * (R.hallHalf + 0.9), cz, f), v(x - side * 0.7, cz, f)],
+      side < 0 ? Math.PI / 2 : -Math.PI / 2, // face the hallway
+    ),
+  );
+}
 
 /** Alignment Hall: open-sided hall on a low platform; 4 lineup rows of 6 facing the staff line. */
 export const HALL = { x: 28, z: 24, floor: 0.3 };
@@ -128,13 +166,13 @@ function gardenSlots() {
 }
 
 /**
- * Zones. Indoor zones end at the door (agents are hidden inside). Outdoor
- * zones have resident `slots`, staff `posts`, a `focus` residents face and a
- * `crowd` point staff face.
+ * Zones. `indoor` zones are where agents rest. Zones have resident `slots`,
+ * staff `posts`, a `focus` residents face and a `crowd` point staff face
+ * (a socket's own `face` heading wins).
  */
 export const ZONES = Object.freeze({
-  'Residence Wing': { node: 'residenceDoor', indoor: true },
-  'Main House': { node: 'houseDoor', indoor: true },
+  'Residence Wing': { node: 'residenceDoor', indoor: true, slots: residenceSlots(), posts: [] },
+  'Main House': { node: 'houseDoor', indoor: true, slots: [], posts: housePosts() },
   'Alignment Hall': {
     node: 'hallEntry', indoor: false, slots: hallSlots(), posts: hallPosts(),
     focus: v(HALL.x, 18.8), crowd: v(HALL.x, 25),
@@ -217,14 +255,14 @@ export class NavGraph {
   }
 
   /**
-   * Reserve a free socket in an outdoor zone (null for indoor zones).
+   * Reserve a free socket in a zone (null if the zone has none).
    * `kind` is 'slots' (residents) or 'posts' (staff). When every socket is
    * taken the agent shares one rather than being turned away.
    */
   claimSlot(zoneName, rng, kind = 'slots') {
     const zone = ZONES[zoneName];
-    const list = zone.indoor ? null : zone[kind]?.length ? zone[kind] : zone.slots;
-    if (!list) return null;
+    const list = zone[kind]?.length ? zone[kind] : zone.slots;
+    if (!list?.length) return null;
     const used = list === zone[kind] ? kind : 'slots';
     const taken = this._taken(zoneName, used);
     const free = list.map((_, i) => i).filter((i) => !taken.has(i));
@@ -252,7 +290,7 @@ export class NavGraph {
     return pts.map((p) => p.clone());
   }
 
-  /** World position a resident stands at when placed (door for indoor zones). */
+  /** World position an agent stands at when placed (the door if it has no socket). */
   placementPosition({ zone, slot }) {
     return (slot ? slot.pos : NODES[ZONES[zone].node]).clone();
   }

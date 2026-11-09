@@ -17,11 +17,17 @@ npm run build    # production build in dist/
 | `src/content/roster.js` | Roles, tiers (kit colours), traits, states, starting stats — pure data |
 | `src/content/timetable.js` | The day window and the block timetable — pure data |
 | `src/content/composure.js` | Aura bands and every drift / attendance / overnight rate — pure data |
-| `src/world/EstateBuilder.js` | Renderer, lighting, camera rig, the estate blockout and roof cutaways |
-| `src/world/NavGraph.js` | Walkable path network, zone sockets (resident slots, staff posts) and route finding |
+| `src/content/interactions.js` | Player actions (patrol check, radial options), cooldowns, range — pure data |
+| `src/world/EstateBuilder.js` | Renderer, lighting, eye-level camera, the estate (walkable atrium and residence) |
+| `src/world/WorldColliders.js` | 2D walk collision, floor heights and the perimeter for the player — pure math |
+| `src/world/NavGraph.js` | Walkable path network, zone sockets (beds, slots, staff posts) and route finding |
+| `src/player/FirstPersonController.js` | Pointer-lock mouse look, WASD walking, collision and step-up |
+| `src/player/Interaction.js` | Crosshair raycast targeting, patrol check (LMB), radial menu (RMB) |
+| `src/ui/RadialMenu.js` | The four-way radial menu around the crosshair |
 | `src/sim/SubjectFactory.js` | Procedural residents and staff: low-poly athletic mannequins, `userData` state, posing |
 | `src/sim/TimeManager.js` | Game clock: 06:40 muster → 07:00–18:00 day → 18:30 close, then skips to the next morning |
-| `src/sim/ScheduleSystem.js` | Zone assignment, socket claiming, waypoint navigation, attendance; publishes `agent.activity` |
+| `src/sim/ScheduleSystem.js` | Zone assignment, socket claiming, navigation, attendance, stretch / send-to-rest; publishes `agent.activity` |
+| `src/sim/interactionRules.js` | Pure interaction rules (cooldowns, why an action is unavailable, stat effects) |
 | `src/sim/composureRules.js` | Pure composure rules (drift, bands, states); runs in Node |
 | `src/sim/ComposureSystem.js` | Applies the rules each frame, emits aura and state changes; sole writer of `stats` |
 | `src/ui/Hud.js` | DOM overlay driven by bus events |
@@ -70,10 +76,32 @@ change with a small hysteresis so values sitting on a threshold don't flicker. A
 `QUEUED_RESET` (an intervention is needed) and returns to `SCHEDULED_TASK` on their own if they recover to 40.
 `IN_SITU_CORRECTION` is defined (drift freezes in it) but no system enters it yet.
 
-## Camera
+## Playing (first person)
 
-LMB drag orbit · RMB drag pan · wheel zoom (to cursor) · WASD move focus · Q/E rotate · F reset. Roofs fade out when you
-focus on the zone beneath them.
+You walk the estate at eye level. Click the view to take the mouse (Esc lets it go).
+
+| Input | Action |
+| --- | --- |
+| WASD / arrows, Shift | Walk, sprint |
+| Mouse | Look |
+| LMB on someone in front of you | **Patrol check**: they turn to you; +2 composure (once per 30 game min); staff check in |
+| Hold RMB on a resident | **Radial menu**: move toward an option, release to choose (release in the middle cancels) |
+| RMB on staff | Inspect |
+| I · Tab | Unpin the inspected card · toggle the roster |
+| Space · 1–3 | Pause · sim speed (walking stays real-time) |
+
+The crosshair ray reaches 6 units (about arm's length plus a step) and stops at the first thing it hits, so walls and
+columns block targeting. A ring on the crosshair and a marker over their head show who you're looking at, with a live
+card underneath.
+
+Radial options (residents): **Inspect** (pin their card), **Encourage** (+8 composure, −3 defiance; 60 min cooldown),
+**Stretch break** (10 min in place: fatigue falls, composure lifts; 45 min cooldown), **Send to rest** (back to
+their bed until the current block ends, or the next one if you send them between blocks; the block counts as
+excused, not missed). Unavailable options are dimmed with the reason.
+
+The **Main House** is a glass-and-stone atrium you can walk into; staff work behind the reception desk. The
+**Residence Wing** has a central hallway with four rooms either side and three beds per room. Residents sit on their
+beds before and after the day and during Midday Recovery.
 
 ## Simulation
 

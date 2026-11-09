@@ -24,6 +24,7 @@ export const ACTIVITY = Object.freeze({
   walking: { composure: 0, fatigue: 0.03, static: false },
   idle: { composure: 0.05, fatigue: -0.05, static: false },
   rest: { composure: 0.2, fatigue: -0.3, static: false },
+  stretch: { composure: 0.3, fatigue: -0.9, static: false }, // player-granted stretch break
 });
 
 /**

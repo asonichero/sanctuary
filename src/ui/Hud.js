@@ -2,6 +2,7 @@ import { bus, Events } from '../core/EventBus.js';
 import { TimeManager, SPEEDS } from '../sim/TimeManager.js';
 import { TIERS, TRAITS } from '../content/roster.js';
 import { BANDS } from '../content/composure.js';
+import { ACTIONS } from '../content/interactions.js';
 
 const $ = (id) => document.getElementById(id);
 const pct = (x) => `${Math.round(x)}%`;
@@ -23,8 +24,13 @@ export class Hud {
     this.composure = composure;
     this.el = Object.fromEntries(
       ['day', 'clock', 'phase', 'progress', 'speeds', 'block', 'next', 'pop', 'staff', 'composure', 'composure-bar',
-        'meters', 'bands', 'queued', 'attendance', 'log', 'roster'].map((k) => [k, $(`hud-${k}`)]),
+        'meters', 'bands', 'queued', 'attendance', 'log', 'roster', 'roster-panel', 'patrols', 'pinned', 'target',
+        'toasts'].map((k) => [k, $(`hud-${k}`)]),
     );
+    this.el.crosshair = $('crosshair');
+    this.el.lockPrompt = $('lock-prompt');
+    this.target = null;
+    this.pinned = null;
 
     this._buildSpeedButtons();
     this._bindKeys();
@@ -37,6 +43,19 @@ export class Hud {
     bus.on(Events.AURA_CHANGED, ({ agent, from, to }) => {
       if (to === 'RED') this._log(`${agent.name} composure critical`, 'text-rose-300');
       else if (from === 'RED') this._log(`${agent.name} steadied (${BANDS[to].label})`, 'text-sky-300');
+    });
+    bus.on(Events.TARGET_CHANGED, ({ agent }) => (this.target = agent));
+    bus.on(Events.POINTER_LOCK, ({ locked }) => this.el.lockPrompt.classList.toggle('is-hidden', locked));
+    bus.on(Events.RADIAL_OPEN, () => (this.el.target.hidden = true));
+    bus.on(Events.INTERACT, ({ action, agent }) => {
+      if (action === 'inspect') {
+        this.pinned = agent;
+        this._toast(`Pinned ${agent.name}`);
+      }
+    });
+    bus.on(Events.INTERACT_RESULT, ({ action, agent, ok, message }) => {
+      this._toast(message, !ok);
+      if (ok && action !== 'check') this._log(`${ACTIONS[action].label} · ${agent.name}`, 'text-emerald-200');
     });
     bus.on(Events.STATE_CHANGED, ({ agent, to }) => {
       if (to === 'QUEUED_RESET') this._log(`${agent.name} queued for reset`, 'text-rose-200');
@@ -66,6 +85,11 @@ export class Hud {
       if (e.code === 'Space') {
         e.preventDefault();
         this.clock.togglePause();
+      } else if (e.code === 'Tab') {
+        e.preventDefault();
+        this.el['roster-panel'].classList.toggle('hidden');
+      } else if (e.code === 'KeyI') {
+        this.pinned = null;
       } else if (['1', '2', '3'].includes(e.key)) {
         this.clock.setSpeed(Number(e.key));
       }
@@ -99,6 +123,7 @@ export class Hud {
       .join('');
     this.el.queued.textContent = s.queued ? `${s.queued} queued for reset` : 'none queued';
     this.el.queued.className = s.queued ? 'text-rose-300' : 'text-stone-500';
+    this.el.patrols.textContent = s.patrolChecks;
     this._renderAttendance();
   }
 
@@ -121,6 +146,47 @@ export class Hud {
     li.textContent = `${TimeManager.format(this.clock.minuteOfDay)}  ${text}`;
     this.el.log.prepend(li);
     while (this.el.log.children.length > 40) this.el.log.lastChild.remove();
+  }
+
+  _toast(text, bad = false) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    if (bad) li.className = 'is-bad';
+    this.el.toasts.prepend(li);
+    setTimeout(() => li.remove(), 3300);
+    while (this.el.toasts.children.length > 4) this.el.toasts.lastChild.remove();
+  }
+
+  /** Detail card for an agent (target card and pinned card share it). */
+  _card(a, { hint = false } = {}) {
+    const { stats, tier, trait, state, role } = a.sim;
+    const staff = role === 'STAFF';
+    const bar = (label, v, color) => `<div class="flex items-center gap-2">
+        <span class="w-16 text-stone-400">${label}</span>
+        <span class="h-1.5 flex-1 rounded bg-white/10"><span class="block h-full rounded" style="width:${pct(v)};background:${color}"></span></span>
+        <span class="w-6 text-right font-mono text-stone-300">${Math.round(v)}</span></div>`;
+    const where = a.path.length ? `→ ${a.placement.zone}` : a.placement.zone;
+    return `<div class="flex items-baseline justify-between gap-3">
+        <span class="text-sm text-stone-100"><span class="tier-dot" style="--c:${hex(TIERS[tier].top)}"></span>${a.name}</span>
+        <span class="font-mono text-[10px] text-stone-500">${a.id}</span></div>
+      <p class="text-stone-400">${staff ? 'Staff' : `${TIERS[tier].label} · ${TRAITS[trait].label}`} · ${where}</p>
+      ${staff ? '' : `<div class="mt-1.5 space-y-1">
+        ${bar('Composure', stats.composure, BAND_CSS[a.band])}
+        ${bar('Fatigue', stats.fatigue, '#a8a29e')}
+        ${bar('Defiance', stats.defiance, '#a8a29e')}</div>
+      <p class="mt-1 ${state === 'SCHEDULED_TASK' ? 'text-stone-500' : 'text-rose-300'}">${STATE_SHORT[state]} · ${a.activity}</p>`}
+      ${hint ? `<p class="mt-1.5 text-[10px] text-stone-500"><kbd>LMB</kbd> check${staff ? ' · <kbd>RMB</kbd> inspect' : ' · hold <kbd>RMB</kbd> actions'}</p>` : ''}`;
+  }
+
+  _renderTarget() {
+    const t = this.target;
+    this.el.crosshair.classList.toggle('has-target', !!t);
+    this.el.crosshair.style.setProperty('--c', t && t.sim.role === 'RESIDENT' ? BAND_CSS[t.band] : '#e7e5e4');
+    const radialOpen = !$('radial').hidden;
+    this.el.target.hidden = !t || radialOpen;
+    if (t && !radialOpen) this.el.target.innerHTML = this._card(t, { hint: true });
+    this.el.pinned.hidden = !this.pinned;
+    if (this.pinned) this.el.pinned.innerHTML = `<p class="mb-1 text-[10px] uppercase tracking-wider text-stone-500">Pinned · <kbd>I</kbd> to unpin</p>${this._card(this.pinned)}`;
   }
 
   _renderRoster() {
@@ -151,12 +217,17 @@ export class Hud {
     this.el.progress.style.width = pct(c.dayProgress * 100);
     const block = c.block;
     this.el.block.textContent = block ? `${block.label} · ${block.zone}` : 'Transition';
+    if (this.target !== this._shownTarget) {
+      this._shownTarget = this.target;
+      this._renderTarget(); // respond to the crosshair immediately
+    }
     this.el.next.textContent = `Next: ${c.next.label} · ${TimeManager.format(c.next.start)}`;
 
     this._rosterTimer -= dtReal;
     if (this._rosterTimer <= 0) {
-      this._rosterTimer = 0.5;
-      this._renderRoster();
+      this._rosterTimer = 0.25;
+      this._renderTarget();
+      if (!this.el['roster-panel'].classList.contains('hidden')) this._renderRoster();
     }
   }
 }

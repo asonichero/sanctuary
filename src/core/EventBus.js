@@ -20,9 +20,13 @@ export const Events = Object.freeze({
   PAUSE: 'engine:pause',
   RESUME: 'engine:resume',
 
-  // Camera
-  CAMERA_MOVED: 'camera:moved', // { target, position }
-  CAMERA_RESET: 'camera:reset',
+  // Player (first person)
+  POINTER_LOCK: 'player:pointerLock', // { locked }
+  TARGET_CHANGED: 'player:target', // { agent | null } — what the crosshair is on
+  INTERACT: 'player:interact', // { action, agent } — see content/interactions.js
+  INTERACT_RESULT: 'player:interactResult', // { action, agent, ok, message }
+  RADIAL_OPEN: 'player:radialOpen', // { agent }
+  RADIAL_CLOSE: 'player:radialClose', // { agent, choice | null }
 
   // World
   ESTATE_BUILT: 'world:estateBuilt', // { zones }

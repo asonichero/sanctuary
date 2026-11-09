@@ -16,7 +16,7 @@ function run({ seed = 'test', days = 1, residents = 24, staff = 3, step = 0.25, 
   const factory = new SubjectFactory({ seed });
   const agents = [...factory.createResidents(residents), ...factory.createStaff(staff)];
   const schedule = new ScheduleSystem({ agents, scene: new THREE.Scene(), clock, seed });
-  const composure = new ComposureSystem({ agents });
+  const composure = new ComposureSystem({ agents, clock });
   const log = { attendance: [], auras: [], states: [], days: [] };
   bus.on(Events.ATTENDANCE, ({ resident, block, status }) => log.attendance.push({ day: clock.day, id: resident.id, block: block.id, status }));
   bus.on(Events.AURA_CHANGED, ({ agent, to }) => log.auras.push({ id: agent.id, to }));

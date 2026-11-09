@@ -4,6 +4,9 @@ import { TimeManager } from './sim/TimeManager.js';
 import { SubjectFactory } from './sim/SubjectFactory.js';
 import { ScheduleSystem } from './sim/ScheduleSystem.js';
 import { ComposureSystem } from './sim/ComposureSystem.js';
+import { FirstPersonController } from './player/FirstPersonController.js';
+import { Interaction } from './player/Interaction.js';
+import { RadialMenu } from './ui/RadialMenu.js';
 import { Hud } from './ui/Hud.js';
 
 const params = new URLSearchParams(location.search);
@@ -21,13 +24,19 @@ const clock = new TimeManager({ day: 1 });
 const factory = new SubjectFactory({ seed: SEED });
 const agents = [...factory.createResidents(RESIDENT_COUNT), ...factory.createStaff(STAFF_COUNT)];
 const schedule = new ScheduleSystem({ agents, scene: estate.scene, clock, seed: SEED });
-const composure = new ComposureSystem({ agents });
+const composure = new ComposureSystem({ agents, clock });
+
+const player = new FirstPersonController({ camera: estate.camera, dom: estate.renderer.domElement, world: estate.world });
+const radial = new RadialMenu(document.getElementById('radial'));
+const interaction = new Interaction({
+  camera: estate.camera, scene: estate.scene, dom: estate.renderer.domElement,
+  agents, occluders: estate.occluders, controller: player, schedule, radial,
+});
 const hud = new Hud({ clock, schedule, composure });
 
 estate.setTimeOfDay(clock.hours);
 
 let last = performance.now();
-let elapsed = 0;
 let tabHidden = false;
 let fpsFrames = 0;
 let fpsTime = 0;
@@ -48,16 +57,16 @@ function frame(now) {
   // Clamp dt so a stalled tab doesn't fling the simulation forward.
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  elapsed += dt;
 
   const dtGame = clock.update(dt);
   schedule.update(dtGame); // movement, attendance, publishes agent.activity
   composure.update(dtGame); // stats, aura bands, states
-  for (const a of agents) SubjectFactory.syncMesh(a, { dtGame, dtReal: dt, time: elapsed });
+  player.update(dt); // walking is real-time, even while the sim is paused
+  for (const a of agents) SubjectFactory.syncMesh(a, { dtGame, dtReal: dt, time: interaction.time });
+  interaction.update(dt); // crosshair target (after meshes have moved)
   estate.setTimeOfDay(clock.hours);
-  estate.update(dt);
   hud.update(dt);
-  bus.emit(Events.TICK, { dt, dtGame, elapsed });
+  bus.emit(Events.TICK, { dt, dtGame, elapsed: interaction.time });
   estate.render();
 
   fpsFrames++;
@@ -73,4 +82,4 @@ requestAnimationFrame(frame);
 bus.emit(Events.READY, { zones: [...estate.zones.keys()] });
 
 // Handy for poking at the scene from devtools (and the smoke test).
-if (import.meta.env.DEV) window.__sanctuary = { bus, estate, clock, schedule, composure, agents };
+if (import.meta.env.DEV) window.__sanctuary = { bus, estate, clock, schedule, composure, agents, player, interaction, radial };

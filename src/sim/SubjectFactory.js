@@ -26,6 +26,8 @@ export const ANIM = Object.freeze({
   HOLD: 'hold', // static hold on a mat: arms out
   RAKE: 'rake', // groundskeeping
   SUPERVISE: 'supervise', // staff at a post: hands behind back
+  SEATED: 'seated', // on the edge of their bed
+  STRETCH: 'stretch', // player-granted stretch break: arms overhead
 });
 
 // Shared geometry (local units; the root is scaled for camera distance).
@@ -114,6 +116,8 @@ export class SubjectFactory {
       steadiness: staff ? 1 : rng.range(0.85, 1.15), // personal scale on composure loss
       band: bandOf(sim.stats.composure),
       activity: 'rest',
+      cooldowns: {}, // player action id -> game minute last used
+      attention: null, // { x, z, until } — turns to face the player briefly
 
       // Movement / placement (owned by ScheduleSystem)
       placement: { zone: staff ? 'Main House' : 'Residence Wing', slot: null },
@@ -211,6 +215,7 @@ export class SubjectFactory {
       color: BAND_COLORS[agent.band], transparent: true, opacity: 0.8, depthWrite: false,
     });
     const ring = new THREE.Mesh(GEO.ring, ringMat);
+    ring.raycast = () => {}; // the crosshair targets the body, not the floor ring
     ring.visible = agent.sim.role === ROLES.RESIDENT;
     root.add(ring);
 
@@ -232,8 +237,14 @@ export class SubjectFactory {
     if (!mesh.visible) return;
 
     mesh.position.copy(position);
-    const diff = Math.atan2(Math.sin(agent.heading - mesh.rotation.y), Math.cos(agent.heading - mesh.rotation.y));
-    mesh.rotation.y += diff * Math.min(1, dtGame * 6);
+    // Turn to face the player briefly after an interaction (not while walking).
+    let heading = agent.heading;
+    const att = agent.attention;
+    if (att && time < att.until && anim !== ANIM.WALK && anim !== ANIM.SEATED) {
+      heading = Math.atan2(att.x - position.x, att.z - position.z);
+    }
+    const diff = Math.atan2(Math.sin(heading - mesh.rotation.y), Math.cos(heading - mesh.rotation.y));
+    mesh.rotation.y += diff * Math.min(1, Math.max(dtGame * 6, dtReal * 5));
 
     agent._phase += dtGame * (anim === ANIM.WALK ? 9 : anim === ANIM.RAKE ? 2.2 : 1.2);
     const ph = agent._phase;
@@ -284,6 +295,24 @@ export class SubjectFactory {
         P.legs = [0.25, -0.15];
         P.knees = [0.15, 0.05];
         P.rake = true;
+        break;
+      }
+      case ANIM.SEATED: {
+        P.figY = -0.52;
+        P.legs = [-Math.PI / 2, -Math.PI / 2];
+        P.knees = [Math.PI / 2, Math.PI / 2];
+        P.arms[0].x = P.arms[1].x = -0.45;
+        P.arms[0].e = P.arms[1].e = -0.55;
+        P.spineX = 0.08 + slump * 0.35;
+        break;
+      }
+      case ANIM.STRETCH: {
+        const s = Math.sin(ph * 0.8);
+        P.arms[0].z = P.arms[1].z = Math.PI - 0.3;
+        P.arms[0].x = P.arms[1].x = 0;
+        P.figZ = s * 0.09;
+        P.spineX = -0.06;
+        P.neckX = -0.15;
         break;
       }
       case ANIM.SUPERVISE: {

@@ -4,6 +4,7 @@ import { BANDS } from '../content/composure.js';
 import {
   applyDrift, applyAttendance, applyOvernight, bandWithHysteresis, nextState,
 } from './composureRules.js';
+import { blockedReason, cooldownLeft, stamp, applyStatAction } from './interactionRules.js';
 
 /** Re-evaluate bands and states at most this often (game minutes) to keep frames cheap. */
 const EVAL_STEP = 1;
@@ -19,12 +20,15 @@ const EVAL_STEP = 1;
  * STATE_CHANGED on transitions. A resident who reaches Red is flagged
  * QUEUED_RESET until they recover to 40.
  *
- * Attendance outcomes and overnight recovery are applied here as well, so
- * this is the only system that writes `sim.stats`.
+ * Attendance outcomes, overnight recovery and the player's stat actions
+ * (patrol check, encourage) are applied here as well, so this is the only
+ * system that writes `sim.stats`.
  */
 export class ComposureSystem {
-  constructor({ agents }) {
+  constructor({ agents, clock }) {
     this.agents = agents;
+    this.clock = clock;
+    this.patrolChecks = 0; // today
     this.residents = agents.filter((a) => a.sim.role === ROLES.RESIDENT);
     this.staff = agents.filter((a) => a.sim.role === ROLES.STAFF);
     this._acc = 0;
@@ -34,7 +38,9 @@ export class ComposureSystem {
         applyAttendance(resident.sim, status);
         this._evaluate(resident);
       }),
+      bus.on(Events.INTERACT, ({ action, agent }) => this._onInteract(action, agent)),
       bus.on(Events.CLOCK_DAY, () => {
+        this.patrolChecks = 0;
         for (const a of this.agents) applyOvernight(a.sim);
         this.agents.forEach((a) => this._evaluate(a));
         this._emitStats();
@@ -54,6 +60,29 @@ export class ComposureSystem {
       this._acc = 0;
       for (const a of this.agents) this._evaluate(a);
     }
+  }
+
+  _onInteract(action, a) {
+    if (action !== 'check' && action !== 'encourage') return;
+    const now = this.clock.total;
+    const result = (ok, message) => bus.emit(Events.INTERACT_RESULT, { action, agent: a, ok, message });
+
+    if (action === 'check') {
+      this.patrolChecks++;
+      if (a.sim.role !== ROLES.RESIDENT) return result(true, `${a.name} — on post, all in order`);
+      if (cooldownLeft(a, 'check', now) > 0) return result(true, `${a.name} — checked recently`);
+      stamp(a, 'check', now);
+      applyStatAction(a.sim, 'check');
+      this._evaluate(a);
+      return result(true, `Checked on ${a.name}`);
+    }
+
+    const reason = blockedReason(a, action, { now, walking: a.path.length > 0, indoor: false, stretching: false });
+    if (reason) return result(false, reason);
+    stamp(a, action, now);
+    applyStatAction(a.sim, action);
+    this._evaluate(a);
+    return result(true, `${a.name} steadies (composure ${Math.round(a.sim.stats.composure)})`);
   }
 
   _evaluate(a) {
@@ -84,6 +113,7 @@ export class ComposureSystem {
       avg: { composure: avg('composure'), fatigue: avg('fatigue'), defiance: avg('defiance') },
       bands,
       queued: rs.filter((r) => r.sim.state === 'QUEUED_RESET').length,
+      patrolChecks: this.patrolChecks,
     };
   }
 
